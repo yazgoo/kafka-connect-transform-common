@@ -99,5 +99,112 @@ public class NormalizeSchemaTest {
 
   }
 
+  @Test
+  public void applyWithNestedFieldCompatibility() {
+    // Create version 1 schema with nested field containing one sub-field
+    Schema nestedSchemaV1 = SchemaBuilder.struct()
+        .name("NestedField")
+        .field("subfield1", Schema.STRING_SCHEMA)
+        .version(1)
+        .build();
+    
+    Schema schemaV1 = SchemaBuilder.struct()
+        .name("TestRecord")
+        .field("id", Schema.STRING_SCHEMA)
+        .field("nested", nestedSchemaV1)
+        .version(1)
+        .build();
+
+    // Create version 2 schema with nested field containing an additional nullable sub-field
+    Schema nestedSchemaV2 = SchemaBuilder.struct()
+        .name("NestedField")
+        .field("subfield1", Schema.STRING_SCHEMA)
+        .field("subfield2", Schema.OPTIONAL_STRING_SCHEMA)  // Added nullable field
+        .version(2)
+        .build();
+    
+    Schema schemaV2 = SchemaBuilder.struct()
+        .name("TestRecord")
+        .field("id", Schema.STRING_SCHEMA)
+        .field("nested", nestedSchemaV2)
+        .version(2)
+        .build();
+
+    // Create a record with version 1 schema
+    Struct nestedStructV1 = new Struct(nestedSchemaV1);
+    nestedStructV1.put("subfield1", "value1");
+    
+    Struct structV1 = new Struct(schemaV1);
+    structV1.put("id", "test-id");
+    structV1.put("nested", nestedStructV1);
+    
+    SinkRecord recordV1 = new SinkRecord(
+        "test-topic",
+        0,
+        null,
+        null,
+        schemaV1,
+        structV1,
+        1234L
+    );
+
+    // Create a record with version 2 schema to establish it as the latest version
+    Struct nestedStructV2 = new Struct(nestedSchemaV2);
+    nestedStructV2.put("subfield1", "value1_v2");
+    nestedStructV2.put("subfield2", "value2_v2");
+    
+    Struct structV2 = new Struct(schemaV2);
+    structV2.put("id", "test-id-v2");
+    structV2.put("nested", nestedStructV2);
+    
+    SinkRecord recordV2 = new SinkRecord(
+        "test-topic",
+        0,
+        null,
+        null,
+        schemaV2,
+        structV2,
+        1235L
+    );
+
+    // Apply transformation to establish version 2 as the latest
+    SinkRecord outputV2 = this.transformation.apply(recordV2);
+    assertNotNull(outputV2);
+    assertEquals(2, outputV2.valueSchema().version());
+
+    // Now apply transformation to version 1 record - it should be normalized to version 2
+    SinkRecord outputV1 = this.transformation.apply(recordV1);
+    
+    // Verify the record was normalized to version 2 schema
+    assertNotNull(outputV1);
+    assertEquals(2, outputV1.valueSchema().version());
+    assertEquals("TestRecord", outputV1.valueSchema().name());
+    
+    // Verify the output struct has the correct data
+    Struct outputStruct = (Struct) outputV1.value();
+    assertEquals("test-id", outputStruct.getString("id"));
+    
+    // Verify the nested structure was correctly normalized
+    Struct outputNestedStruct = outputStruct.getStruct("nested");
+    assertNotNull(outputNestedStruct);
+    assertEquals("NestedField", outputNestedStruct.schema().name());
+    assertEquals(2, outputNestedStruct.schema().version());
+    
+    // Verify original field value is preserved
+    assertEquals("value1", outputNestedStruct.getString("subfield1"));
+    
+    // Verify new nullable field is null (backward compatible)
+    assertEquals(null, outputNestedStruct.getString("subfield2"));
+    
+    // Verify the schema structure has both fields
+    assertEquals(2, outputNestedStruct.schema().fields().size());
+    assertNotNull(outputNestedStruct.schema().field("subfield1"));
+    assertNotNull(outputNestedStruct.schema().field("subfield2"));
+    
+    // Verify the new field is optional (nullable)
+    Field subfield2 = outputNestedStruct.schema().field("subfield2");
+    assertEquals(true, subfield2.schema().isOptional());
+  }
+
 
 }

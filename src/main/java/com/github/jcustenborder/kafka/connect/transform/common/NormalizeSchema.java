@@ -159,6 +159,7 @@ public abstract class NormalizeSchema<R extends ConnectRecord<R>> implements Tra
           } else {
             Struct outputStruct = new Struct(outputField.schema());
             copy(inputStruct, outputStruct);
+            output.put(outputField, outputStruct);
           }
         } else {
           output.put(outputField, input.get(outputField.name()));
