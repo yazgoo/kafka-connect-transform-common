@@ -14,8 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.*;
 
 public class NormalizeSchemaTest {
 
@@ -204,6 +203,131 @@ public class NormalizeSchemaTest {
     // Verify the new field is optional (nullable)
     Field subfield2 = outputNestedStruct.schema().field("subfield2");
     assertEquals(true, subfield2.schema().isOptional());
+  }
+
+  @Test
+  public void applyWithArrayFieldCompatibility() {
+    // Create version 1 schema with nested array containing one struct item
+    Schema nestedStructSchemaV1 = SchemaBuilder.struct()
+        .name("NestedField")
+        .field("subfield1", Schema.STRING_SCHEMA)
+        .version(1)
+        .build();
+
+    Schema nestedArraySchemaV1 = SchemaBuilder.array(nestedStructSchemaV1)
+        .name("NestedArray")
+        .version(1)
+        .build();
+
+    Schema schemaV1 = SchemaBuilder.struct()
+        .name("TestRecord")
+        .field("id", Schema.STRING_SCHEMA)
+        .field("nested", nestedArraySchemaV1)
+        .version(1)
+        .build();
+
+    // Create version 2 schema with nested array containing one struct item that has an additional nullable sub-field
+    Schema nestedStructSchemaV2 = SchemaBuilder.struct()
+        .name("NestedField")
+        .field("subfield1", Schema.STRING_SCHEMA)
+        .field("subfield2", Schema.OPTIONAL_STRING_SCHEMA)  // Added nullable field
+        .version(2)
+        .build();
+
+    Schema nestedArraySchemaV2 = SchemaBuilder.array(nestedStructSchemaV2)
+        .name("NestedArray")
+        .version(2)
+        .build();
+
+    Schema schemaV2 = SchemaBuilder.struct()
+        .name("TestRecord")
+        .field("id", Schema.STRING_SCHEMA)
+        .field("nested", nestedArraySchemaV2)
+        .version(2)
+        .build();
+
+    // Create a record with version 1 schema
+    Struct deeplyNestedStructV1 = new Struct(nestedStructSchemaV1);
+    deeplyNestedStructV1.put("subfield1", "value1");
+
+    List<Struct> nestedStructV1 = Arrays.asList(deeplyNestedStructV1);
+
+    Struct structV1 = new Struct(schemaV1);
+    structV1.put("id", "test-id");
+    structV1.put("nested", nestedStructV1);
+
+    SinkRecord recordV1 = new SinkRecord(
+        "test-topic",
+        0,
+        null,
+        null,
+        schemaV1,
+        structV1,
+        1234L
+    );
+
+    // Create a record with version 2 schema to establish it as the latest version
+    Struct deeplyNestedStructV2 = new Struct(nestedStructSchemaV2);
+    deeplyNestedStructV2.put("subfield1", "value1_v2");
+    deeplyNestedStructV2.put("subfield2", "value2_v2");
+
+    List<Struct> nestedStructV2 = Arrays.asList(deeplyNestedStructV2);
+
+    Struct structV2 = new Struct(schemaV2);
+    structV2.put("id", "test-id-v2");
+    structV2.put("nested", nestedStructV2);
+
+    SinkRecord recordV2 = new SinkRecord(
+        "test-topic",
+        0,
+        null,
+        null,
+        schemaV2,
+        structV2,
+        1235L
+    );
+
+    // Apply transformation to establish version 2 as the latest
+    SinkRecord outputV2 = this.transformation.apply(recordV2);
+    assertNotNull(outputV2);
+    assertEquals(2, outputV2.valueSchema().version());
+
+    // Now apply transformation to version 1 record - it should be normalized to version 2
+    SinkRecord outputV1 = this.transformation.apply(recordV1);
+
+    // Verify the record was normalized to version 2 schema
+    assertNotNull(outputV1);
+    assertEquals(2, outputV1.valueSchema().version());
+    assertEquals("TestRecord", outputV1.valueSchema().name());
+
+    // Verify the output struct has the correct data
+    Struct outputStruct = (Struct) outputV1.value();
+    assertNotNull(outputStruct);
+    assertEquals("test-id", outputStruct.getString("id"));
+
+    // Verify the array is not empty in the nested field
+    List<Struct> outputNestedArray = outputStruct.getArray("nested");
+    assertEquals(1, outputNestedArray.size());
+
+    // Verify the struct in array was correctly normalized
+    Struct outputArrayStruct = outputNestedArray.getFirst();
+    assertEquals("NestedField", outputArrayStruct.schema().name());
+    assertEquals(2, outputArrayStruct.schema().version());
+
+    // Verify original field value is preserved
+    assertEquals("value1", outputArrayStruct.getString("subfield1"));
+
+    // Verify new nullable field is null (backward compatible)
+    assertNull(outputArrayStruct.getString("subfield2"));
+
+    // Verify the schema structure has both fields
+    assertEquals(2, outputArrayStruct.schema().fields().size());
+    assertNotNull(outputArrayStruct.schema().field("subfield1"));
+    assertNotNull(outputArrayStruct.schema().field("subfield2"));
+
+    // Verify the new field is optional (nullable)
+    Field subfield2 = outputArrayStruct.schema().field("subfield2");
+    assertTrue(subfield2.schema().isOptional());
   }
 
 

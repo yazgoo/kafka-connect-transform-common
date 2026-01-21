@@ -31,7 +31,9 @@ import org.apache.kafka.connect.transforms.Transformation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -148,25 +150,40 @@ public abstract class NormalizeSchema<R extends ConnectRecord<R>> implements Tra
 
   Map<SchemaKey, SchemaState> stateLookup = new HashMap<>();
 
-  void copy(Struct input, Struct output) {
+  private void copyStruct(Struct input, Struct output) {
     for (Field outputField : output.schema().fields()) {
       Field inputField = input.schema().field(outputField.name());
-      if (null != inputField) {
-        if (Schema.Type.STRUCT == outputField.schema().type()) {
-          Struct inputStruct = input.getStruct(inputField.name());
-          if (null == inputStruct) {
-            output.put(outputField, null);
-          } else {
-            Struct outputStruct = new Struct(outputField.schema());
-            copy(inputStruct, outputStruct);
-            output.put(outputField, outputStruct);
-          }
-        } else {
-          output.put(outputField, input.get(outputField.name()));
-        }
-      } else {
+      if (inputField == null) {
         log.trace("copy() - Skipping '{}' because input does not have field.", outputField.name());
+        continue;
       }
+      Object inputValue = input.get(inputField.name());
+      output.put(outputField, copyValue(inputValue, outputField.schema()));
+    }
+  }
+
+  private void copyList(List<Object> input, List<Object> output, Schema valueSchema) {
+    if (input == null) return;
+    for (Object item : input) {
+      output.add(copyValue(item, valueSchema));
+    }
+  }
+
+  private Object copyValue(Object value, Schema schema) {
+    if (value == null) return null;
+    switch (schema.type()) {
+      case STRUCT:
+        Struct inputStruct = (Struct) value;
+        Struct outputStruct = new Struct(schema);
+        copyStruct(inputStruct, outputStruct);
+        return outputStruct;
+      case ARRAY:
+        List<Object> inputArray = (List<Object>) value;
+        List<Object> outputArray = new ArrayList<>();
+        copyList(inputArray, outputArray, schema.valueSchema());
+        return outputArray;
+      default:
+        return value;
     }
   }
 
@@ -205,7 +222,7 @@ public abstract class NormalizeSchema<R extends ConnectRecord<R>> implements Tra
     Struct inputStruct = (Struct) input.value();
 
     Struct outputStruct = new Struct(latestSchema);
-    copy(inputStruct, outputStruct);
+    copyStruct(inputStruct, outputStruct);
     return new SchemaAndValue(latestSchema, outputStruct);
   }
 
